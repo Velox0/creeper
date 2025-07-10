@@ -227,6 +227,12 @@ func main() {
 		return
 	}
 	startURL := flag.Arg(0)
+
+	// Default to https if no scheme is specified
+	if !strings.HasPrefix(startURL, "http://") && !strings.HasPrefix(startURL, "https://") {
+		startURL = "https://" + startURL
+	}
+
 	base, err := url.Parse(startURL)
 	if err != nil {
 		fmt.Println("Invalid URL:", err)
