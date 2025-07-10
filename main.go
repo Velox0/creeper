@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 
 	"golang.org/x/net/html"
+	"golang.org/x/term"
 )
 
 // fetches the HTML document from the given URL
@@ -26,14 +28,13 @@ func normalizeURL(u *url.URL) string {
 	norm := *u
 	norm.RawQuery = ""
 	norm.Fragment = ""
-	// Always keep trailing slash for root
 	if norm.Path == "" {
 		norm.Path = "/"
 	}
 	return norm.String()
 }
 
-// pathOnly returns just the path (and query if needed) from a URL string
+// pathOnly returns just the path from a URL string
 func pathOnly(u *url.URL) string {
 	p := u.EscapedPath()
 	if p == "" {
@@ -91,6 +92,73 @@ func visitLinks(base *url.URL, n *html.Node, state *CrawlerState, from string, d
 	}
 }
 
+func printSummaryTable(state *CrawlerState, startPath string) {
+	// Get terminal width
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || width < 30 {
+		width = 80
+	}
+	countCol := 6
+	pathCol := width - countCol - 3
+
+	paths := make([]string, 0, len(state.paths))
+	for _, p := range state.paths {
+		paths = append(paths, p)
+	}
+	uniquePaths := make(map[string]struct{})
+	for _, p := range paths {
+		uniquePaths[p] = struct{}{}
+	}
+	finalPaths := make([]string, 0, len(uniquePaths))
+	for p := range uniquePaths {
+		finalPaths = append(finalPaths, p)
+	}
+	startIdx := -1
+	for i, p := range finalPaths {
+		if p == startPath {
+			startIdx = i
+			break
+		}
+	}
+	if startIdx > 0 {
+		finalPaths[0], finalPaths[startIdx] = finalPaths[startIdx], finalPaths[0]
+	}
+	if startIdx != 0 {
+		sort.Strings(finalPaths[1:])
+	} else {
+		sort.Strings(finalPaths[1:])
+	}
+
+	// Header
+	fmt.Printf("%-*s | %s\n", countCol, "Count", "Path")
+	fmt.Println(strings.Repeat("-", width))
+
+	for _, p := range finalPaths {
+		// Find normalized url for this path
+		var incoming int
+		for norm, path := range state.paths {
+			if path == p {
+				incoming = state.incoming[norm]
+				break
+			}
+		}
+		// Split path into chunks
+		pathRunes := []rune(p)
+		for i := 0; i < len(pathRunes); i += pathCol {
+			end := i + pathCol
+			if end > len(pathRunes) {
+				end = len(pathRunes)
+			}
+			chunk := string(pathRunes[i:end])
+			if i == 0 {
+				fmt.Printf("%-*d | %s\n", countCol, incoming, chunk)
+			} else {
+				fmt.Printf("%-*s | %s\n", countCol, "", chunk)
+			}
+		}
+	}
+}
+
 func main() {
 	maxPages := flag.Int("n", 100, "Maximum number of pages to visit")
 	maxDepth := flag.Int("i", 0, "Maximum recursion depth (0 = unlimited)")
@@ -114,47 +182,19 @@ func main() {
 		return
 	}
 	normStart := normalizeURL(base)
+	startPath := pathOnly(base)
 	state := &CrawlerState{
 		visited:      map[string]bool{normStart: true},
 		incoming:     map[string]int{normStart: 0},
 		maxPages:     *maxPages,
 		pagesVisited: 1,
 		maxDepth:     *maxDepth,
-		paths:        map[string]string{normStart: pathOnly(base)},
+		paths:        map[string]string{normStart: startPath},
 	}
 	visitLinks(base, doc, state, normStart, 1)
 
 	if *showSummary {
 		fmt.Println("\nSummary of visited pages and incoming link counts:")
-		// Sort by path for pretty output
-		paths := make([]string, 0, len(state.paths))
-		for _, p := range state.paths {
-			paths = append(paths, p)
-		}
-		// Remove duplicates
-		uniquePaths := make(map[string]struct{})
-		for _, p := range paths {
-			uniquePaths[p] = struct{}{}
-		}
-		finalPaths := make([]string, 0, len(uniquePaths))
-		for p := range uniquePaths {
-			finalPaths = append(finalPaths, p)
-		}
-		// Sort
-		sort.Strings(finalPaths)
-		// Table header
-		fmt.Printf("%-40s | %s\n", "Path", "Incoming Links")
-		fmt.Println(strings.Repeat("-", 55))
-		for _, p := range finalPaths {
-			// Find normalized url for this path
-			var incoming int
-			for norm, path := range state.paths {
-				if path == p {
-					incoming = state.incoming[norm]
-					break
-				}
-			}
-			fmt.Printf("%-40s | %d\n", p, incoming)
-		}
+		printSummaryTable(state, startPath)
 	}
 }
