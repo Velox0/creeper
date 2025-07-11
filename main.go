@@ -47,6 +47,7 @@ func pathOnly(u *url.URL) string {
 
 type XMLUrlSet struct {
 	XMLName xml.Name `xml:"urlset"`
+	Xmlns   string   `xml:"xmlns,attr"`
 	Urls    []XMLUrl `xml:"url"`
 }
 type XMLUrl struct {
@@ -201,7 +202,10 @@ func writeXML(state *CrawlerState) error {
 	sort.Slice(urls, func(i, j int) bool {
 		return urls[i].Priority > urls[j].Priority
 	})
-	urlset := XMLUrlSet{Urls: urls}
+	urlset := XMLUrlSet{
+		Xmlns: "http://www.sitemaps.org/schemas/sitemap/0.9",
+		Urls:  urls,
+	}
 	f, err := os.Create("sitemap.xml")
 	if err != nil {
 		return err
