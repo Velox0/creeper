@@ -67,7 +67,7 @@ type CrawlerState struct {
 }
 
 // visitLinks finds all in-domain links and recursively visits them
-func visitLinks(base *url.URL, n *html.Node, state *CrawlerState, from string, depth int) {
+func visitLinks(base *url.URL, n *html.Node, state *CrawlerState, from string, depth int, useLocalhost bool, port int, origHost string) {
 	if state.pagesVisited >= state.maxPages || (state.maxDepth > 0 && depth > state.maxDepth) {
 		return
 	}
@@ -92,9 +92,9 @@ func visitLinks(base *url.URL, n *html.Node, state *CrawlerState, from string, d
 						fmt.Println(normStr)
 						state.visited[normStr] = true
 						state.pagesVisited++
-						doc, err := fetch(normStr)
+						doc, err := fetchWithHost(absURL, useLocalhost, port, origHost)
 						if err == nil {
-							visitLinks(base, doc, state, normStr, depth+1)
+							visitLinks(base, doc, state, normStr, depth+1, useLocalhost, port, origHost)
 						}
 					}
 				}
@@ -102,7 +102,7 @@ func visitLinks(base *url.URL, n *html.Node, state *CrawlerState, from string, d
 		}
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		visitLinks(base, c, state, from, depth)
+		visitLinks(base, c, state, from, depth, useLocalhost, port, origHost)
 	}
 }
 
@@ -218,11 +218,41 @@ func writeXML(state *CrawlerState) error {
 	return enc.Encode(urlset)
 }
 
+func fetchWithHost(u *url.URL, useLocalhost bool, port int, origHost string) (*html.Node, error) {
+	client := &http.Client{}
+	fetchURL := u.String()
+	if useLocalhost {
+		// Rewrite URL to use localhost and port, and always use http
+		localURL := *u
+		localURL.Scheme = "http"
+		localURL.Host = "localhost"
+		if port != 80 {
+			localURL.Host = fmt.Sprintf("localhost:%d", port)
+		}
+		fetchURL = localURL.String()
+	}
+	req, err := http.NewRequest("GET", fetchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if useLocalhost {
+		req.Host = origHost
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return html.Parse(resp.Body)
+}
+
 func main() {
 	maxPages := flag.Int("n", 100, "Maximum number of pages to visit")
 	maxDepth := flag.Int("i", 0, "Maximum recursion depth (0 = unlimited)")
 	showSummary := flag.Bool("s", true, "Show summary of incoming links at the end")
 	xmlOut := flag.Bool("x", false, "Generate XML output (output.xml)")
+	useLocalhost := flag.Bool("l", false, "Crawl using localhost for the given domain (for local server testing)")
+	port := flag.Int("p", 80, "Port to use with -l (default 80)")
 	flag.Parse()
 
 	if flag.NArg() < 1 {
@@ -242,7 +272,19 @@ func main() {
 		fmt.Println("Invalid URL:", err)
 		return
 	}
-	doc, err := fetch(startURL)
+	origHost := base.Host
+	firstURL := base
+	if *useLocalhost {
+		// Rewrite for localhost and port, and always use http
+		localURL := *base
+		localURL.Scheme = "http"
+		localURL.Host = "localhost"
+		if *port != 80 {
+			localURL.Host = fmt.Sprintf("localhost:%d", *port)
+		}
+		firstURL = &localURL
+	}
+	doc, err := fetchWithHost(firstURL, *useLocalhost, *port, origHost)
 	if err != nil {
 		fmt.Println("Error fetching URL:", err)
 		return
@@ -258,7 +300,7 @@ func main() {
 		paths:        map[string]string{normStart: startPath},
 		outgoing:     map[string]int{normStart: 0},
 	}
-	visitLinks(base, doc, state, normStart, 1)
+	visitLinks(base, doc, state, normStart, 1, *useLocalhost, *port, origHost)
 
 	if *showSummary {
 		fmt.Println("\nSummary of visited pages and incoming link counts:")
